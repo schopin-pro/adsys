@@ -36,6 +36,11 @@ pub enum MountStatus {
     Asked,
 }
 
+struct MountError {
+    path: String,
+    error: glib::Error,
+}
+
 pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     debug!("Mounting entries listed in {}", mounts_file);
 
@@ -63,7 +68,7 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     let g_loop = glib::MainLoop::new(Some(&g_ctx), false);
 
     // Creates a mutex to handle the exit status
-    let mu: Arc<Mutex<Vec<Msg>>> = Arc::new(Mutex::new(Vec::new()));
+    let mu = Arc::new(Mutex::new(Vec::new()));
 
     // Clones the variables that are going to be moved into the closure.
     let g_loop_clone = g_loop.clone();
@@ -71,13 +76,14 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
 
     // Attaches the receiver to the main context, along with a closure that is called everytime there is a new message in the channel.
     rx.attach(Some(&g_ctx), move |x| {
-        match x.status {
-            Err(_) => {
-                warn!("Failed when mounting {}", x.path);
-                mu_clone.lock().unwrap().push(x);
+        let Msg { path, status } = x;
+        match status {
+            Err(error) => {
+                warn!("Failed when mounting {}", path);
+                mu_clone.lock().unwrap().push(MountError { path, error });
             }
-            Ok(MountStatus::Done) => debug!("Mounting of {} was successful", x.path),
-            _ => error!("Unexpected return status: {:?}", x.status),
+            Ok(MountStatus::Done) => debug!("Mounting of {} was successful", path),
+            _ => error!("Unexpected return status: {:?}", status),
         };
         mounts_left -= 1;
         glib::Continue(match mounts_left {
@@ -99,14 +105,12 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     }
 
     let mut had_error = false;
-    for err in errors.iter() {
-        if let Err(e) = &err.status {
-            warn!("Mount process for {} failed: {}", err.path, e);
+    for MountError { path, error } in errors.iter() {
+        warn!("Mount process for {} failed: {}", path, error);
 
-            // Ensures that the function will not error out if the location was already mounted.
-            if !e.matches(gio::IOErrorEnum::AlreadyMounted) {
-                had_error = true;
-            }
+        // Ensures that the function will not error out if the location was already mounted.
+        if !error.matches(gio::IOErrorEnum::AlreadyMounted) {
+            had_error = true;
         }
     }
 
