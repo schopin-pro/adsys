@@ -177,11 +177,9 @@ fn handle_mount(entry: MountEntry, tx: glib::Sender<Msg>) {
             path: entry.mount_path,
             status: r.map(|_| MountStatus::Done),
         };
-        match tx.send(msg) {
-            Ok(_) => {}
-            Err(e) => error!("Failed to send message in the channel: {}", e),
+        if let Err(e) = tx.send(msg) {
+            error!("Failed to send message in the channel: {}", e)
         };
-        drop(tx);
     };
 
     f.mount_enclosing_volume(
