@@ -44,15 +44,16 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
         AdsysMountError::ParseError
     })?;
 
+    if parsed_entries.is_empty() {
+        return Ok(());
+    }
+
     // Setting up the channel used for communication between the mount operations and the main function.
     let g_ctx = glib::MainContext::default();
     let (tx, rx) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
 
     // Grabs the ammount of mounts to be done before passing the ownership of parsed_entries.
     let mut mounts_left = parsed_entries.len();
-    if mounts_left < 1 {
-        return Ok(());
-    }
 
     for entry in parsed_entries {
         handle_mount(entry, tx.clone());
