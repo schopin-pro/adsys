@@ -41,6 +41,30 @@ struct MountError {
     error: glib::Error,
 }
 
+fn user_mount_cb(
+    msg: Msg,
+    errors: &Mutex<Vec<MountError>>,
+    main_loop: &glib::MainLoop,
+    mounts_left: &mut usize,
+) -> glib::Continue {
+    let Msg { path, status } = msg;
+    match status {
+        Err(error) => {
+            warn!("Failed when mounting {}", path);
+            errors.lock().unwrap().push(MountError { path, error });
+        }
+        Ok(MountStatus::Done) => debug!("Mounting of {} was successful", path),
+        _ => error!("Unexpected return status: {:?}", status),
+    };
+    *mounts_left -= 1;
+
+    // Ends the main loop if there are no more mounts left.
+    if *mounts_left == 0 {
+        main_loop.quit();
+    }
+    glib::Continue(*mounts_left != 0)
+}
+
 pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     debug!("Mounting entries listed in {}", mounts_file);
 
@@ -77,26 +101,6 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
         let g_loop = g_loop.clone();
         rx.attach(Some(&g_ctx), move |msg| {
             user_mount_cb(msg, &errors, &g_loop, &mut mounts_left)
-        });
-        rx.attach(Some(&g_ctx), move |x| {
-            let Msg { path, status } = x;
-            match status {
-                Err(error) => {
-                    warn!("Failed when mounting {}", path);
-                    errors.lock().unwrap().push(MountError { path, error });
-                }
-                Ok(MountStatus::Done) => debug!("Mounting of {} was successful", path),
-                _ => error!("Unexpected return status: {:?}", status),
-            };
-            mounts_left -= 1;
-            glib::Continue(match mounts_left {
-                0 => {
-                    // Ends the main loop if there are no more mounts left.
-                    g_loop.quit();
-                    false
-                }
-                _ => true,
-            })
         });
     }
 
