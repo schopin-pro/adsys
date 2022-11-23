@@ -68,39 +68,43 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     let g_loop = glib::MainLoop::new(Some(&g_ctx), false);
 
     // Creates a mutex to handle the exit status
-    let mu = Arc::new(Mutex::new(Vec::new()));
-
-    // Clones the variables that are going to be moved into the closure.
-    let g_loop_clone = g_loop.clone();
-    let mu_clone = Arc::clone(&mu);
+    let errors = Arc::new(Mutex::new(Vec::new()));
 
     // Attaches the receiver to the main context, along with a closure that is called everytime there is a new message in the channel.
-    rx.attach(Some(&g_ctx), move |x| {
-        let Msg { path, status } = x;
-        match status {
-            Err(error) => {
-                warn!("Failed when mounting {}", path);
-                mu_clone.lock().unwrap().push(MountError { path, error });
-            }
-            Ok(MountStatus::Done) => debug!("Mounting of {} was successful", path),
-            _ => error!("Unexpected return status: {:?}", status),
-        };
-        mounts_left -= 1;
-        glib::Continue(match mounts_left {
-            0 => {
-                // Ends the main loop if there are no more mounts left.
-                g_loop_clone.quit();
-                false
-            }
-            _ => true,
-        })
-    });
+    {
+        // Clone shared data for closure capture.
+        let errors = errors.clone();
+        let g_loop = g_loop.clone();
+        rx.attach(Some(&g_ctx), move |msg| {
+            user_mount_cb(msg, &errors, &g_loop, &mut mounts_left)
+        });
+        rx.attach(Some(&g_ctx), move |x| {
+            let Msg { path, status } = x;
+            match status {
+                Err(error) => {
+                    warn!("Failed when mounting {}", path);
+                    errors.lock().unwrap().push(MountError { path, error });
+                }
+                Ok(MountStatus::Done) => debug!("Mounting of {} was successful", path),
+                _ => error!("Unexpected return status: {:?}", status),
+            };
+            mounts_left -= 1;
+            glib::Continue(match mounts_left {
+                0 => {
+                    // Ends the main loop if there are no more mounts left.
+                    g_loop.quit();
+                    false
+                }
+                _ => true,
+            })
+        });
+    }
 
     g_loop.run();
 
     // Evaluates the arc content to check if at least one operation failed.
-    let errors = mu.lock().unwrap();
-    if errors.len() == 0 {
+    let errors = errors.lock().unwrap();
+    if errors.is_empty() {
         return Ok(());
     }
 
