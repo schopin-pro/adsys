@@ -23,8 +23,10 @@ struct MountEntry {
 /// Struct representing the message that is to be passed in the glib channel.
 pub struct Msg {
     path: String,
-    status: MountStatus,
+    status: MountResult,
 }
+
+pub type MountResult = Result<MountStatus, glib::Error>;
 
 /// Represents the status returned by a mount attempt.
 #[derive(Debug)]
@@ -32,7 +34,6 @@ pub struct Msg {
 pub enum MountStatus {
     Done,
     Asked,
-    Error(glib::Error),
 }
 
 pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
@@ -73,11 +74,11 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     // Attaches the receiver to the main context, along with a closure that is called everytime there is a new message in the channel.
     rx.attach(Some(&g_ctx), move |x| {
         match x.status {
-            MountStatus::Done => debug!("Mounting of {} was successful", x.path),
-            MountStatus::Error(_) => {
+            Err(_) => {
                 warn!("Failed when mounting {}", x.path);
                 mu_clone.lock().unwrap().push(x);
             }
+            Ok(MountStatus::Done) => debug!("Mounting of {} was successful", x.path),
             _ => error!("Unexpected return status: {:?}", x.status),
         };
         mounts_left -= 1;
@@ -101,7 +102,7 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
 
     let mut had_error = false;
     for err in errors.iter() {
-        if let MountStatus::Error(e) = &err.status {
+        if let Err(e) = &err.status {
             warn!("Mount process for {} failed: {}", err.path, e);
 
             // Ensures that the function will not error out if the location was already mounted.
@@ -163,15 +164,9 @@ fn handle_mount(entry: MountEntry, tx: glib::Sender<Msg>) {
 
     // Callback invoked by gio after setting up the mount.
     let mount_handled_cb = move |r: Result<(), glib::Error>| {
-        let msg = match r {
-            Ok(_) => Msg {
-                path: entry.mount_path,
-                status: MountStatus::Done,
-            },
-            Err(e) => Msg {
-                path: entry.mount_path,
-                status: MountStatus::Error(e),
-            },
+        let msg = Msg {
+            path: entry.mount_path,
+            status: r.map(|_| MountStatus::Done),
         };
         match tx.send(msg) {
             Ok(_) => {}
@@ -199,15 +194,15 @@ fn ask_password_cb(
     if mount_op.is_anonymous() && flags.contains(gio::AskPasswordFlags::ANONYMOUS_SUPPORTED) {
         // Unsafe block is needed for data and set_data implementations in glib.
         unsafe {
-            if let Some(data) = mount_op.data("state") {
+            if let Some(data) = mount_op.data::<MountResult>("state") {
                 // Ensures that we only try anonymous access once.
-                if let MountStatus::Asked = *(data.as_ptr()) {
+                if let Ok(MountStatus::Asked) = *(data.as_ptr()) {
                     warn!("Anonymous access denied.");
                     mount_op.reply(gio::MountOperationResult::Aborted);
                 }
             } else {
                 debug!("Anonymous is supported by the provider.");
-                mount_op.set_data("state", MountStatus::Asked);
+                mount_op.set_data("state", Ok(MountStatus::Asked) as MountResult);
                 mount_op.reply(gio::MountOperationResult::Handled);
             }
         }
