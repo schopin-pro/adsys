@@ -104,20 +104,19 @@ pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
         return Ok(());
     }
 
-    let mut had_error = false;
     for MountError { path, error } in errors.iter() {
         warn!("Mount process for {} failed: {}", path, error);
-
-        // Ensures that the function will not error out if the location was already mounted.
-        if !error.matches(gio::IOErrorEnum::AlreadyMounted) {
-            had_error = true;
-        }
     }
 
-    if had_error {
-        return Err(AdsysMountError::MountError);
+    // Ensures that the function will not error out if the location was already mounted.
+    if errors
+        .iter()
+        .any(|MountError { error, .. }| !error.matches(gio::IOErrorEnum::AlreadyMounted))
+    {
+        Ok(())
+    } else {
+        Err(AdsysMountError::MountError)
     }
-    Ok(())
 }
 
 /// Reads the file and parses the mount points listed in it.
