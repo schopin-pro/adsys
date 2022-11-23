@@ -39,13 +39,10 @@ pub enum MountStatus {
 pub fn handle_user_mounts(mounts_file: &str) -> Result<(), AdsysMountError> {
     debug!("Mounting entries listed in {}", mounts_file);
 
-    let parsed_entries = match parse_entries(mounts_file) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Error when parsing entries: {}", e);
-            return Err(AdsysMountError::ParseError);
-        }
-    };
+    let parsed_entries = parse_entries(mounts_file).map_err(|e| {
+        error!("Error when parsing entries: {}", e);
+        AdsysMountError::ParseError
+    })?;
 
     // Setting up the channel used for communication between the mount operations and the main function.
     let g_ctx = glib::MainContext::default();
